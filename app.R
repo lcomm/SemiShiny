@@ -18,6 +18,8 @@ maxtplot <- rbarnum + 5
 cens <- 10^8
 nxts <- 100
 
+
+
 # Functions ---------------------------------------------------------------
 
 # Simulate data based on random intercept model (strategy 1)
@@ -40,7 +42,6 @@ simulate_RI <- function(n,
   } else {
     log_gamma_i <- 0
   }
-  
   
   # Simulate potential confounder
   x_c <- rnorm(n, mean = 0, sd = 1)
@@ -77,21 +78,16 @@ simulate_RI <- function(n,
   return(sim_dat)
 }
 
-# Get principal state based on values of t, T0, and T1
-get_state <- function(T0, T1, at_time) {
-  if ((T0 > at_time) & (T1 > at_time)) {
-    state_t <- "AA"
-  } else if ((T0 > at_time) & (T1 < at_time)) {
-    state_t <- "TK"
-  } else if ((T0 < at_time) & (T1 > at_time)) {
-    state_t <- "CK"
-  } else if ((T0 < at_time) & (T1 < at_time)) {
-    state_t <- "DD"
-  } else {
-    state_t <- "undef"
-  }
-  return(state_t)
+
+# Make a matrix of whether elements of a vector are greater than times in a 
+# time sequence vector
+# Time are along the columns and rows correspond to elements of vec
+# Rows are time-varying T/F indicators for survival past t_j
+check_vector_gt_timeseq <- function(vec, timeseq) {
+  return(matrix((vec > rep(timeseq, each = length(vec))), 
+                nrow = length(vec), ncol = length(timeseq)))
 }
+
 
 # Calculate percentage of R observations which are truncated by T
 get_pctRbar <- function(dat, rbarnum){
@@ -107,108 +103,59 @@ get_pctRbar <- function(dat, rbarnum){
   return(pctRbar)  
 }
 
-# Loop over data points and evaluate principal state membership
-# and individual-level causal effects at each time point
-calc_states_diffs <- function(dat, maxt) {
-  
-  # Grid of points to evaluate
-  xts <- seq(0, maxt, length.out = nxts)
 
+# Calculate matrix of principal states over all time points
+calc_states <- function(dat, xts) {
+  
   # Shells
   n <- nrow(dat)/2
-  states <- diffs <- matrix(NA, nrow = n, ncol = length(xts))
+  states <- matrix(NA, nrow = n, ncol = length(xts))
 
   # Process  
   T0 <- dat$T[dat$z == 0]
   T1 <- dat$T[dat$z == 1]
+  
+  # Matrix of T/F for person i still alive at time j
+  alive0 <- check_vector_gt_timeseq(vec = T0, timeseq = xts)
+  alive1 <- check_vector_gt_timeseq(vec = T1, timeseq = xts)
+  
+  # Translate into survival principal states
+  states <- matrix(NA, nrow = n, ncol = length(xts))
+  states[(alive0 == 1) & (alive1 == 1)] <- "AA"
+  states[(alive0 == 1) & (alive1 == 0)] <- "TK"
+  states[(alive0 == 0) & (alive1 == 1)] <- "CK"
+  states[(alive0 == 0) & (alive1 == 0)] <- "DD"
+  
+  # Return state matrix
+  return(states)
+  
+}
+
+
+# Calculate difference in readmission incidence by each t in a vector of times
+calc_readmission_diffs <- function(dat, xts) { 
+  
+  # Make shell
+  diffs <- matrix(NA, nrow = nrow(dat)/2, ncol = length(xts))
+  
+  # Process data set
   R0 <- dat$R[dat$z == 0]
   R1 <- dat$R[dat$z == 1]
   delta_R0 <- dat$delta_R[dat$z == 0]
   delta_R1 <- dat$delta_R[dat$z == 1]
-  R0_eff <- ifelse(delta_R0 == 1, R0, maxt + 1)
-  R1_eff <- ifelse(delta_R1 == 1, R1, maxt + 1)
-  alive0 <- t(sapply(T0,  FUN = function(x) {(x > xts)*1}))
-  alive1 <- t(sapply(T1,  FUN = function(x) {(x > xts)*1}))
-  rehosp0 <- 1 - t(sapply(R0_eff,  FUN = function(x) {(x > xts)*1}))
-  rehosp1 <- 1 - t(sapply(R1_eff,  FUN = function(x) {(x > xts)*1}))
+  R0_eff <- ifelse(delta_R0 == 1, R0, max(xts) + 1)
+  R1_eff <- ifelse(delta_R1 == 1, R1, max(xts) + 1)
 
-  # Calculate principal state and individual-level causal effect
-  diffs  <- (rehosp1 - rehosp0) * (alive0 * alive1)
-  for (id in 1:n) {
-  states[id, ] <- sapply(xts, FUN = get_state, T0 = T0[id], T1 = T1[id])
-  }
+  # Matrix of T/F whether readmission occurred for person i by time j
+  readmitted0 <- 1 - check_vector_gt_timeseq(vec = R0_eff, timeseq = xts)
+  readmitted1 <- 1 - check_vector_gt_timeseq(vec = R1_eff, timeseq = xts)
+  
+  # Calculate hospitalization incidence difference
+  # Will later perform calculations only on AA
+  diffs <- readmitted1 - readmitted0
   
   # Return list
-  return(list(states = states, diffs = diffs))
-}
-
-# Constructing composition plot
-make_cplot <- function(dat, maxt) {
-  
-  # Get state matrix
-  states <- calc_states_diffs(dat, maxt)[["states"]]
-  
-  # Grid of points to evaluate
-  xts <- seq(0, maxt, length.out = nxts)
-  
-  # Preprocessing
-  comp_dat0 <- data.frame(time = xts)  
-  pstates <- c("AA", "CK", "TK", "DD")
-  for (pstate in pstates) {
-    comp_dat0[[pstate]] <- colMeans(states == pstate)
-  }
-  
-  # Data frame containing proportion in each state at each t
-  comp_dat <- data.frame(Time = rep(xts, times = length(pstates)),
-                         State = rep(pstates, each = length(xts)))
-  
-  comp_dat$Proportion <- c(comp_dat0[["AA"]], comp_dat0[["CK"]],
-                           comp_dat0[["TK"]], comp_dat0[["DD"]])
-  comp_dat$State <- factor(comp_dat$State, levels = rev(pstates), 
-                           ordered = TRUE)
-
-  # Make the plot
-  cplot <- ggplot(comp_dat, aes(x = Time, y = Proportion, fill = State)) + 
-    geom_area(alpha = 0.6, color = "black") + 
-    scale_x_continuous(breaks = seq(0, maxt, by = 30)) +
-    ggtitle("Principal state composition over time") + 
-    theme(legend.position = "bottom", legend.key.size = unit(0.6,"line"))
-  
-  # Return
-  return(cplot)
-}
-
-# Constructing causal effect (alpha(t,t)) plot
-make_aplot <- function(dat, maxt) {
-  
-  # Grid of points to evaluate
-  xts <- seq(0, maxt, length.out = nxts)
-  
-  # Get state and difference matrices
-  res <- calc_states_diffs(dat, maxt)
-
-  # Subset to always-alive group
-  diffs_AA <- res$diffs
-  diffs_AA[res$states != "AA"] <- NA
-  countAA <- colSums(res$states == "AA")
-  newmaxt <- ifelse(any(countAA == 0), xts[min(which(countAA == 0))], maxt)
-  
-  # Make data frame of causal effects
-  ce_dat <- data.frame(Time = xts,
-                       alpha_tt = colMeans(diffs_AA, na.rm = TRUE))
-  
-  # Make plot
-  aplot <- ggplot(ce_dat, aes(x = Time, y = alpha_tt)) +
-    geom_smooth(method = "loess", se = FALSE) + 
-    ylab(expression(alpha(r,t)~with~r==t)) + 
-    scale_x_continuous(breaks = seq(0, newmaxt, by = 30)) +
-    ggtitle("Causal effect on rehospitalization among Always Alive at t") +
-    labs(subtitle = expression(alpha(r,t) == P(R[1]<r~'|'~T[0] > t, T[1] > t)-
-                                 P(R[0]<r~'|'~T[0] > t, T[1] > t)))
-  
-  # Return
-  return(aplot)
-  
+  return(diffs)
 }
 
 
@@ -242,7 +189,8 @@ grid_arrange_shared_legend <- function(..., nrow = 1, ncol = length(list(...)), 
   
 }
 
-# Produce R plot object
+
+# Produce R (rehospitalization) plot object
 make_rplot <- function(dat, showRbar) {
 
   # Calculate percentage of R values truncated by T
@@ -280,7 +228,8 @@ make_rplot <- function(dat, showRbar) {
   return(rplot)
 }
 
-# Make T plot object
+
+# Make T (death time) plot object
 make_tplot <- function(dat) {
   tplot <- ggplot(dat, aes(T, fill = World, colour = World)) +
     geom_density(alpha = 0.2) +
@@ -293,6 +242,7 @@ make_tplot <- function(dat) {
   return(tplot)
 }
 
+
 # Make combined R and T plot object
 make_rt_comb_plot <- function(dat, showRbar) {
   rplot <- make_rplot(dat, showRbar)
@@ -300,10 +250,86 @@ make_rt_comb_plot <- function(dat, showRbar) {
   suppressWarnings(grid_arrange_shared_legend(rplot, tplot, nrow = 1, ncol = 2))
 }
 
+
+# Constructing composition plot
+make_cplot <- function(dat, maxt) {
+  
+  # Grid of points to evaluate
+  xts <- seq(0, maxt, length.out = nxts)
+  
+  # Get state matrix
+  states <- calc_states(dat, xts)
+  
+  # Preprocessing
+  comp_dat0 <- data.frame(time = xts)  
+  pstates <- c("AA", "CK", "TK", "DD")
+  for (pstate in pstates) {
+    comp_dat0[[pstate]] <- colMeans(states == pstate)
+  }
+  
+  # Data frame containing proportion in each state at each t
+  comp_dat <- data.frame(Time = rep(xts, times = length(pstates)),
+                         State = rep(pstates, each = length(xts)))
+  comp_dat$Proportion <- c(comp_dat0[["AA"]], comp_dat0[["CK"]],
+                           comp_dat0[["TK"]], comp_dat0[["DD"]])
+  comp_dat$State <- factor(comp_dat$State, levels = rev(pstates), 
+                           ordered = TRUE)
+  
+  # Make the plot
+  cplot <- ggplot(comp_dat, aes(x = Time, y = Proportion, fill = State)) + 
+    geom_area(alpha = 0.6, color = "black") + 
+    scale_x_continuous(breaks = seq(0, maxt, by = 30)) +
+    ggtitle("Principal state composition over time") + 
+    theme(legend.position = "bottom")
+  
+  # Return
+  return(cplot)
+}
+
+
+# Constructing causal effect (alpha(t,t)) plot
+make_aplot <- function(dat, maxt, yrange) {
+  
+  # Grid of points to evaluate
+  xts <- seq(0, maxt, length.out = nxts)
+  
+  # Get state matrix
+  states <- calc_states(dat, xts)
+  
+  # Get difference in cumulative incidence of readmission by t
+  diffs <- calc_readmission_diffs(dat, xts)
+  diffs[states != "AA"] <- NA
+  
+  # Subset to always-alive group
+  countAA <- colSums(states == "AA")
+  newmaxt <- ifelse(any(countAA == 0), xts[min(which(countAA == 0))], maxt)
+  
+  # Make data frame of causal effects
+  ce_dat <- data.frame(Time = xts, alpha_tt = colMeans(diffs, na.rm = TRUE),
+                       NumAlive = countAA)
+  
+  # Make plot
+  aplot <- ggplot(ce_dat, aes(x = Time, y = alpha_tt, color = NumAlive)) +
+    geom_line(stat = "smooth", method = "loess", size = 1.2, alpha = 0.2) + 
+    geom_point(size = 1.5) +
+    ylab(expression(alpha(r,t)~with~r==t)) + 
+    ylim(yrange[1], yrange[2]) + 
+    scale_x_continuous(breaks = seq(0, newmaxt, by = 30)) +
+    scale_color_gradientn(colors = hue_pal()(7), 
+                          guide = guide_colorbar("Number Always-Alive")) + 
+    ggtitle("Causal effect on rehospitalization among Always Alive at t") +
+    labs(subtitle = expression(alpha(r,t) == P(R[1]<r~'|'~T[0] > t, T[1] > t)-
+                                 P(R[0]<r~'|'~T[0] > t, T[1] > t)))
+  
+  # Return
+  return(aplot)
+}
+
+
+
 # ui and server functions -------------------------------------------------
 
-
-# Define UI for random distribution app ----
+# Define UI ----
 ui <- fluidPage(
   
   # App title ----
@@ -316,21 +342,35 @@ ui <- fluidPage(
     sidebarPanel(
       withMathJax(),
       
+      ### Plot parameters ----
+      h3("Plot Parameters"),
+      
       # Show Rbar values in R dist plot
       h5("\\(P(R_z = \\bar{\\mathbb{R}})\\)"),
       checkboxInput("showRbar", label = "Show", value = TRUE),
       
+      # Control range for causal effect graph
+      sliderInput("yrange",
+                  "Causal effect Y axis limits:",
+                  value = c(-0.05, 0.05),
+                  min = -0.15,
+                  max = 0.15),
+      
+      br(),
+      
+      ### Simulation parameters ----
+      h3("Data Generation Parameters"),
+      
       # Simulate data with subject specific frailties?
       h5("Simulate subject-specific frailty (if not, \\(\\gamma_i = 1 \\ \\forall \\ i\\))"),
       checkboxInput("frailty", label = "Include frailty", value = TRUE),
-      
-      # Input: Slider for the number of observations to generate ----
+  
       sliderInput("n",
                   "Sample size (smaller = faster):",
                   value = 10000,
-                  min = 1000,
+                  min = 5000,
                   max = 50000,
-                  step = 1000),
+                  step = 5000),
       sliderInput("theta.true",
                   "True \\(\\theta\\):",
                   value = 1,
@@ -340,35 +380,32 @@ ui <- fluidPage(
                   "True \\(\\alpha_1\\):",
                   value = 0.8,
                   min = 0.01,
-                  max = 2),
+                  max = 4),
       sliderInput("alpha2.true",
                   "True \\(\\alpha_2\\):",
                   value = 1.2,
-                  min = 0.01,
+                  min = 0.1,
                   max = 2),
       sliderInput("alpha3.true",
                   "True \\(\\alpha_3\\):",
-                  value = 0.15,
-                  min = 1.2,
+                  value = 1.2,
+                  min = 0.1,
                   max = 2),
       sliderInput("beta1.true",
                   "True \\(\\beta_1\\):",
                   value = -0.6,
-                  min = -1,
-                  max = 1, 
-                  step = 0.05),
+                  min = -2,
+                  max = 2),
       sliderInput("beta2.true",
                   "True \\(\\beta_2\\):",
                   value = -0.8,
-                  min = -1,
-                  max = 1, 
-                  step = 0.05),
+                  min = -2,
+                  max = 2),
       sliderInput("beta3.true",
                   "True \\(\\beta_3\\):",
                   value = -1,
-                  min = -1,
-                  max = 1, 
-                  step = 0.05),
+                  min = -2,
+                  max = 2),
       sliderInput("kappa1.true",
                   "True \\(\\kappa_1\\):",
                   value = 0.01,
@@ -389,7 +426,7 @@ ui <- fluidPage(
     # Main panel for displaying outputs ----
     mainPanel(
       
-      # Output: plots
+      # Output: dgp description, density, composition, and effect plots
       tabsetPanel(type = "tabs",
                   tabPanel("Notation", uiOutput("notation")),
                   tabPanel("Event distributions", plotOutput("eventPlots")),
@@ -418,26 +455,23 @@ server <- function(input, output) {
     includeMarkdown("Strategy1models.md")
   })
   
-  # Show plots of nonterminal and terminal events ----
+  # Show plots of nonterminal and terminal events
   output$eventPlots <- renderPlot({
     make_rt_comb_plot(dat(), input$showRbar)
   })
   
-  # Show composition of population by principal state over time ----
+  # Show composition of population by principal state over time
   output$compPlot <- renderPlot({
     make_cplot(dat(), maxt)
   })
   
   # Graph causal effect over time
   output$causalEffectPlot <- renderPlot({
-    make_aplot(dat(), maxt)
+    make_aplot(dat(), maxt, yrange = input$yrange)
   })
  
-  # Testing tab for printing stuff
-  output$garbage <- renderText({
-    testing  
-  })
 }
+
 
 # Create Shiny app ----
 shinyApp(ui, server)
