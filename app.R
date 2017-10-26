@@ -28,43 +28,49 @@ simulate_RI <- function(n,
                         alpha1.true, alpha2.true, alpha3.true,
                         beta1.true, beta2.true, beta3.true,
                         kappa1.true, kappa2.true, kappa3.true,
-                        cens,
-                        frailty = TRUE) {
+                        cens) {
   
   # Cens -> vector
   if (length(cens) != 2) {
     cens <- c(cens, cens + 1)
   }
   
-  # Frailty parameters
-  if (frailty) {
-    log_gamma_i <- log(rgamma(n, shape = 1/theta.true, rate = 1/theta.true))  
-  } else {
-    log_gamma_i <- 0
-  }
-  
   # Simulate potential confounder
+  # (Not currently doing anything with the confounder x_c)
   x_c <- rnorm(n, mean = 0, sd = 1)
   a <- rep(0:1, each = n)
-  x1 <- x2 <- x3 <- cbind(c(x_c, x_c), a, c(log_gamma_i, log_gamma_i))
+  
+  # Frailty - draw and include as if it's a normal covariate with coef 1
+  if (theta.true > 0) {
+    log_gamma_true <- log(rgamma(n, 1/theta.true, 1/theta.true))
+  }
+  if (theta.true == 0) {
+    log_gamma_true <- rep(0, n)
+  }
+  
+  # Design matrices 
+  x1 <- x2 <- x3 <- cbind(a, c(log_gamma_true, log_gamma_true))
+  ID <- c(1:n, 1:n)
   
   # Simulate, adding one to each set of parameters
+  # theta.true set to 0 here because we have already included the frailties in X
   sim_dat <- simID(cluster = NULL, x1, x2, x3, 
                    alpha1.true = alpha1.true,
                    alpha2.true = alpha2.true,
                    alpha3.true = alpha3.true,
-                   beta1.true = c(0, beta1.true, 1),
-                   beta2.true = c(0, beta2.true, 1),
-                   beta3.true = c(0, beta3.true, 1),
+                   beta1.true = c(beta1.true, 1),
+                   beta2.true = c(beta2.true, 1),
+                   beta3.true = c(beta3.true, 1),
                    kappa1.true = kappa1.true,
                    kappa2.true = kappa2.true,
                    kappa3.true = kappa3.true,
-                   theta.true, SigmaV.true = NULL, cens)
+                   theta.true = 0, 
+                   SigmaV.true = NULL, cens)
   
   # Rename and add treatment column
   colnames(sim_dat) <- c("R", "delta_R", "T", "delta_T")
-  sim_dat$ID <- c(1:n, 1:n)
-  sim_dat$z <- factor(rep(0:1, each = n))
+  sim_dat$ID <- ID
+  sim_dat$z <- as.factor(a)
   
   # Make factor version of Z for nicer plotting
   sim_dat$World <- factor(sim_dat$z, levels = c("1", "0"), 
@@ -128,7 +134,6 @@ calc_states <- function(dat, xts) {
   
   # Return state matrix
   return(states)
-  
 }
 
 
@@ -316,7 +321,9 @@ make_aplot <- function(dat, maxt, yrange) {
     ylim(yrange[1], yrange[2]) + 
     scale_x_continuous(breaks = seq(0, newmaxt, by = 30)) +
     scale_color_gradientn(colors = hue_pal()(7), 
+                          limits = c(0, max(ce_dat$NumAlive)),
                           guide = guide_colorbar("Number Always-Alive")) + 
+    geom_hline(yintercept = 0, linetype = "dashed") + 
     ggtitle("Causal effect on rehospitalization among Always Alive at t") +
     labs(subtitle = expression(alpha(r,t) == P(R[1]<r~'|'~T[0] > t, T[1] > t)-
                                  P(R[0]<r~'|'~T[0] > t, T[1] > t)))
@@ -352,75 +359,76 @@ ui <- fluidPage(
       # Control range for causal effect graph
       sliderInput("yrange",
                   "Causal effect Y axis limits:",
-                  value = c(-0.05, 0.05),
-                  min = -0.15,
-                  max = 0.15),
-      
-      br(),
+                  value = c(-0.3, 0.3),
+                  min = -0.5,
+                  max = 0.5, 
+                  step = 0.05),
       
       ### Simulation parameters ----
       h3("Data Generation Parameters"),
-      
-      # Simulate data with subject specific frailties?
-      h5("Simulate subject-specific frailty (if not, \\(\\gamma_i = 1 \\ \\forall \\ i\\))"),
-      checkboxInput("frailty", label = "Include frailty", value = TRUE),
-  
       sliderInput("n",
-                  "Sample size (smaller = faster):",
+                  "Sample size (smaller = app runs faster):",
                   value = 10000,
                   min = 5000,
                   max = 50000,
                   step = 5000),
       sliderInput("theta.true",
-                  "True \\(\\theta\\):",
-                  value = 1,
-                  min = 0.01,
-                  max = 1),
+                  "True \\(\\theta\\) (0 = no induced correlation):",
+                  value = 0.5,
+                  min = 0,
+                  max = 2,
+                  step = 0.1),
       sliderInput("alpha1.true",
-                  "True \\(\\alpha_1\\):",
+                  "True \\(\\alpha_1\\) (bigger = more clumping):",
                   value = 0.8,
                   min = 0.01,
                   max = 4),
       sliderInput("alpha2.true",
-                  "True \\(\\alpha_2\\):",
+                  "True \\(\\alpha_2\\) (bigger = more clumping):",
                   value = 1.2,
                   min = 0.1,
                   max = 2),
       sliderInput("alpha3.true",
-                  "True \\(\\alpha_3\\):",
+                  "True \\(\\alpha_3\\) (bigger = more clumping):",
                   value = 1.2,
                   min = 0.1,
                   max = 2),
       sliderInput("beta1.true",
-                  "True \\(\\beta_1\\):",
+                  "True \\(\\beta_1\\) (positive = treatment accelerates):",
                   value = -0.6,
                   min = -2,
-                  max = 2),
+                  max = 2, 
+                  step = 0.2),
       sliderInput("beta2.true",
-                  "True \\(\\beta_2\\):",
+                  "True \\(\\beta_2\\) (positive = treatment accelerates):",
                   value = -0.8,
                   min = -2,
-                  max = 2),
+                  max = 2, 
+                  step = 0.2),
       sliderInput("beta3.true",
-                  "True \\(\\beta_3\\):",
+                  "True \\(\\beta_3\\) (positive = treatment accelerates):",
                   value = -1,
                   min = -2,
-                  max = 2),
-      sliderInput("kappa1.true",
-                  "True \\(\\kappa_1\\):",
-                  value = 0.01,
-                  min = 0.01,
-                  max = 2),
-      sliderInput("kappa2.true",
-                  "True \\(\\kappa_2\\):",
-                  value = 0.1,
-                  min = 0.01,
-                  max = 2),
-      sliderInput("kappa3.true",
-                  "True \\(\\kappa_3\\):",
-                  value = 0.1,
-                  min = 0.01,
-                  max = 2)
+                  max = 2, 
+                  step = 0.2),
+      sliderInput("logkappa1.true",
+                  "True \\(\\log(\\kappa_1) = \\beta_{01}\\) (smaller = smaller rate):",
+                  value = -2,
+                  min = -8.5,
+                  max = 0, 
+                  step = 0.1),
+      sliderInput("logkappa2.true",
+                  "True \\(\\log(\\kappa_2) = \\beta_{02}\\) (smaller = smaller rate):",
+                  value = -6.5,
+                  min = -8.5,
+                  max = 0, 
+                  step = 0.1),
+      sliderInput("logkappa3.true",
+                  "True \\(\\log(\\kappa_3) = \\beta_{03}\\) (smaller = smaller rate):",
+                  value = -5,
+                  min = -8.5,
+                  max = 0, 
+                  step = 0.1)
     ),
     
     # Main panel for displaying outputs ----
@@ -446,8 +454,10 @@ server <- function(input, output) {
     simulate_RI(input$n, input$theta.true, 
                 input$alpha1.true, input$alpha2.true, input$alpha3.true,
                 input$beta1.true, input$beta2.true, input$beta3.true,
-                input$kappa1.true, input$kappa2.true, input$kappa3.true,
-                cens, frailty = input$frailty)
+                exp(input$logkappa1.true), 
+                exp(input$logkappa2.true), 
+                exp(input$logkappa3.true),
+                cens)
   })
   
   # Write model notation
