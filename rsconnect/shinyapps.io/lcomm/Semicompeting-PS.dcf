@@ -1,8 +1,10 @@
 name: Semicompeting-PS
 title:
+username:
 account: lcomm
 server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
 appId: 227005
-bundleId: 1046735
+bundleId: 1384744
 url: https://lcomm.shinyapps.io/Semicompeting-PS/
-when: 1509039106.48701
+when: 1526910313.14754
