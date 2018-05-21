@@ -24,10 +24,11 @@ nxts <- 100
 
 # Simulate data based on random intercept model (strategy 1)
 simulate_RI <- function(n, 
-                        theta.true, 
+                        sigma.true, 
                         alpha1.true, alpha2.true, alpha3.true,
-                        beta1.true, beta2.true, beta3.true,
+                        alpha4.true, alpha5.true, alpha6.true,
                         kappa1.true, kappa2.true, kappa3.true,
+                        kappa4.true, kappa5.true, kappa6.true,
                         cens) {
   
   # Cens -> vector
@@ -40,37 +41,56 @@ simulate_RI <- function(n,
   x_c <- rnorm(n, mean = 0, sd = 1)
   a <- rep(0:1, each = n)
   
-  # Frailty - draw and include as if it's a normal covariate with coef 1
-  if (theta.true > 0) {
-    log_gamma_true <- log(rgamma(n, 1/theta.true, 1/theta.true))
+  # Frailty - draw 
+  if (sigma.true > 0) {
+    gamma.true <- rgamma(n, 1/sigma.true, 1/sigma.true)
   }
-  if (theta.true == 0) {
-    log_gamma_true <- rep(0, n)
+  if (sigma.true == 0) {
+    gamma.true <- rep(1, n)
   }
   
-  # Design matrices 
-  x1 <- x2 <- x3 <- cbind(a, c(log_gamma_true, log_gamma_true))
-  ID <- c(1:n, 1:n)
+  # Design matrices (shell placeholder covariate for now)
+  x1 <- x2 <- x3 <- cbind(log(gamma.true), 0)
+  ID <- c(1:n)
   
-  # Simulate, adding one to each set of parameters
-  # theta.true set to 0 here because we have already included the frailties in X
-  sim_dat <- simID(cluster = NULL, x1, x2, x3, 
-                   alpha1.true = alpha1.true,
-                   alpha2.true = alpha2.true,
-                   alpha3.true = alpha3.true,
-                   beta1.true = c(beta1.true, 1),
-                   beta2.true = c(beta2.true, 1),
-                   beta3.true = c(beta3.true, 1),
-                   kappa1.true = kappa1.true,
-                   kappa2.true = kappa2.true,
-                   kappa3.true = kappa3.true,
-                   theta.true = 0, 
-                   SigmaV.true = NULL, cens)
+  # Simulate data under control and treatment
+  # theta.true (sigma.true in our notation) is set to 0 here 
+  # (we have already included frailties in the linear design matrix)
+  sim_control <- simID(cluster = NULL, 
+                       x1 = x1, x2 = x2, x3 = x3, 
+                       alpha1.true = alpha1.true,
+                       alpha2.true = alpha2.true,
+                       alpha3.true = alpha3.true,
+                       beta1.true = c(1, 0),
+                       beta2.true = c(1, 0),
+                       beta3.true = c(1, 0),
+                       kappa1.true = kappa1.true,
+                       kappa2.true = kappa2.true,
+                       kappa3.true = kappa3.true,
+                       theta.true = 0, 
+                       SigmaV.true = NULL, 
+                       cens = cens)
+  
+  sim_treated <- simID(cluster = NULL, 
+                       x1 = x1, x2 = x2, x3 = x3, 
+                       alpha1.true = alpha4.true,
+                       alpha2.true = alpha5.true,
+                       alpha3.true = alpha6.true,
+                       beta1.true = c(1, 0),
+                       beta2.true = c(1, 0),
+                       beta3.true = c(1, 0),
+                       kappa1.true = kappa4.true,
+                       kappa2.true = kappa5.true,
+                       kappa3.true = kappa6.true,
+                       theta.true = 0, 
+                       SigmaV.true = NULL, 
+                       cens = cens)
   
   # Rename and add treatment column
+  sim_dat <- rbind(sim_control, sim_treated)
   colnames(sim_dat) <- c("R", "delta_R", "T", "delta_T")
-  sim_dat$ID <- ID
-  sim_dat$z <- as.factor(a)
+  sim_dat$ID <- rep(ID, 2)
+  sim_dat$z <- rep(0:1, each = n)
   
   # Make factor version of Z for nicer plotting
   sim_dat$World <- factor(sim_dat$z, levels = c("1", "0"), 
@@ -207,10 +227,10 @@ make_rplot <- function(dat, showRbar) {
   rplot <- ggplot(dat, aes(Rtoplot, fill = World, colour = World)) +
     geom_density(alpha = 0.2, trim = maxt) +
     ylab("Density") +
-    ggtitle("Rehospitalization")
+    ggtitle("Hospital readmission")
   if (showRbar) {
     rplot <- rplot  +
-      scale_x_continuous("Rehospitalization time",
+      scale_x_continuous("Readmission time",
                          limits = c(0, maxtplot),
                          breaks = c(seq(0, maxt, by = 30), rbarnum),
                          labels = c(seq(0, maxt, by = 30), expression(bold(bar(R))))) +
@@ -224,7 +244,7 @@ make_rplot <- function(dat, showRbar) {
                y = 0, yend = min(pctRbar[[2]]))
   } else {
     rplot <- rplot + 
-      scale_x_continuous("Rehospitalization time",
+      scale_x_continuous("Readmission time",
                          limits = c(0, maxtplot),
                          breaks = seq(0, maxt, by = 30),
                          labels = seq(0, maxt, by = 30))
@@ -292,8 +312,8 @@ make_cplot <- function(dat, maxt) {
 }
 
 
-# Constructing causal effect (alpha(t,t)) plot
-make_aplot <- function(dat, maxt, yrange) {
+# Constructing TV-SACE causal effect (Q(t,t)) plot
+make_tvsace_plot <- function(dat, maxt, yrange) {
   
   # Grid of points to evaluate
   xts <- seq(0, maxt, length.out = nxts)
@@ -302,6 +322,7 @@ make_aplot <- function(dat, maxt, yrange) {
   states <- calc_states(dat, xts)
   
   # Get difference in cumulative incidence of readmission by t
+  # (Time-varying survivor average causal effect)
   diffs <- calc_readmission_diffs(dat, xts)
   diffs[states != "AA"] <- NA
   
@@ -314,10 +335,10 @@ make_aplot <- function(dat, maxt, yrange) {
                        NumAlive = countAA)
   
   # Make plot
-  aplot <- ggplot(ce_dat, aes(x = Time, y = alpha_tt, color = NumAlive)) +
+  tvsaceplot <- ggplot(ce_dat, aes(x = Time, y = alpha_tt, color = NumAlive)) +
     geom_line(stat = "smooth", method = "loess", size = 1.2, alpha = 0.2) + 
     geom_point(size = 1.5) +
-    ylab(expression(alpha(r,t)~with~r==t)) + 
+    ylab(expression(Q(r,t)~with~r==t)) + 
     ylim(yrange[1], yrange[2]) + 
     scale_x_continuous(breaks = seq(0, newmaxt, by = 30)) +
     scale_color_gradientn(colors = hue_pal()(7), 
@@ -329,15 +350,15 @@ make_aplot <- function(dat, maxt, yrange) {
                                  P(R[0]<r~'|'~T[0] > t, T[1] > t)))
   
   # Return
-  return(aplot)
+  return(tvsaceplot)
 }
-
 
 
 # ui and server functions -------------------------------------------------
 
 # Define UI ----
 ui <- fluidPage(
+  theme = shinythemes::shinytheme("flatly"),
   
   # App title ----
   titlePanel("Semicompeting Risks Data Simulations"),
@@ -348,6 +369,87 @@ ui <- fluidPage(
     # Sidebar panel for inputs ----
     sidebarPanel(
       withMathJax(),
+      
+      ### Simulation parameters ----
+      h3("Data Generation Parameters"),
+      sliderInput("n",
+                  "Sample size (smaller = app runs faster):",
+                  value = 10000,
+                  min = 5000,
+                  max = 50000,
+                  step = 5000),
+      sliderInput("sigma.true",
+                  "True \\(\\sigma\\), variance of frailties (0 = no heterogeneity):",
+                  value = 0.5,
+                  min = 0,
+                  max = 2,
+                  step = 0.1),
+      sliderInput("alpha1.true",
+                  "Model 1 control shape \\(\\alpha_1\\) (bigger = more clumping):",
+                  value = 0.8,
+                  min = 0.01,
+                  max = 4),
+      sliderInput("alpha2.true",
+                  "Model 2 control shape \\(\\alpha_2\\) (bigger = more clumping):",
+                  value = 1.2,
+                  min = 0.1,
+                  max = 2),
+      sliderInput("alpha3.true",
+                  "Model 3 control shape \\(\\alpha_3\\) (bigger = more clumping):",
+                  value = 1.2,
+                  min = 0.1,
+                  max = 2),
+      sliderInput("alpha4.true",
+                  "Model 1 treated shape \\(\\alpha_4\\) (bigger = more clumping):",
+                  value = 0.8,
+                  min = 0.01,
+                  max = 4),
+      sliderInput("alpha5.true",
+                  "Model 2 treated shape \\(\\alpha_5\\) (bigger = more clumping):",
+                  value = 1.2,
+                  min = 0.1,
+                  max = 2),
+      sliderInput("alpha6.true",
+                  "Model 3 treated shape \\(\\alpha_6\\) (bigger = more clumping):",
+                  value = 1.2,
+                  min = 0.1,
+                  max = 2),
+      sliderInput("kappa1.true",
+                  "Model 1 control reference hazard \\(\\kappa_1\\) (bigger = faster):",
+                  value = 0.2,
+                  min = 0.15,
+                  max = 7.5, 
+                  step = 0.05),
+      sliderInput("kappa2.true",
+                  "Model 2 control reference hazard \\(\\kappa_2\\) (bigger = faster):",
+                  value = 0.1,
+                  min = 0.15,
+                  max = 7.5, 
+                  step = 0.05),
+      sliderInput("kappa3.true",
+                  "Model 3 control reference hazard \\(\\kappa_3\\) (bigger = faster):",
+                  value = 0.35,
+                  min = 0.15,
+                  max = 7, 
+                  step = 0.05),
+      sliderInput("kappa4.true",
+                  "Model 1 treated reference hazard \\(\\kappa_4\\) (bigger = faster):",
+                  value = 0.5,
+                  min = 0.15,
+                  max = 7.5, 
+                  step = 0.05),
+      sliderInput("kappa5.true",
+                  "Model 2 treated reference hazard \\(\\kappa_5\\) (bigger = faster):",
+                  value = 0.7,
+                  min = 0.15,
+                  max = 7.5, 
+                  step = 0.05),
+      sliderInput("kappa6.true",
+                  "Model 3 treated reference hazard \\(\\kappa_6\\) (bigger = faster):",
+                  value = 0.2,
+                  min = 0.15,
+                  max = 7, 
+                  step = 0.05),
       
       ### Plot parameters ----
       h3("Plot Parameters"),
@@ -362,73 +464,8 @@ ui <- fluidPage(
                   value = c(-0.3, 0.3),
                   min = -0.5,
                   max = 0.5, 
-                  step = 0.05),
+                  step = 0.05)
       
-      ### Simulation parameters ----
-      h3("Data Generation Parameters"),
-      sliderInput("n",
-                  "Sample size (smaller = app runs faster):",
-                  value = 10000,
-                  min = 5000,
-                  max = 50000,
-                  step = 5000),
-      sliderInput("theta.true",
-                  "True \\(\\theta\\) (0 = no induced correlation):",
-                  value = 0.5,
-                  min = 0,
-                  max = 2,
-                  step = 0.1),
-      sliderInput("alpha1.true",
-                  "True \\(\\alpha_1\\) (bigger = more clumping):",
-                  value = 0.8,
-                  min = 0.01,
-                  max = 4),
-      sliderInput("alpha2.true",
-                  "True \\(\\alpha_2\\) (bigger = more clumping):",
-                  value = 1.2,
-                  min = 0.1,
-                  max = 2),
-      sliderInput("alpha3.true",
-                  "True \\(\\alpha_3\\) (bigger = more clumping):",
-                  value = 1.2,
-                  min = 0.1,
-                  max = 2),
-      sliderInput("beta1.true",
-                  "True \\(\\beta_1\\) (positive = treatment accelerates):",
-                  value = -0.6,
-                  min = -2,
-                  max = 2, 
-                  step = 0.2),
-      sliderInput("beta2.true",
-                  "True \\(\\beta_2\\) (positive = treatment accelerates):",
-                  value = -0.8,
-                  min = -2,
-                  max = 2, 
-                  step = 0.2),
-      sliderInput("beta3.true",
-                  "True \\(\\beta_3\\) (positive = treatment accelerates):",
-                  value = -1,
-                  min = -2,
-                  max = 2, 
-                  step = 0.2),
-      sliderInput("logkappa1.true",
-                  "True \\(\\log(\\kappa_1) = \\beta_{01}\\) (smaller = smaller rate):",
-                  value = -2,
-                  min = -8.5,
-                  max = 0, 
-                  step = 0.1),
-      sliderInput("logkappa2.true",
-                  "True \\(\\log(\\kappa_2) = \\beta_{02}\\) (smaller = smaller rate):",
-                  value = -6.5,
-                  min = -8.5,
-                  max = 0, 
-                  step = 0.1),
-      sliderInput("logkappa3.true",
-                  "True \\(\\log(\\kappa_3) = \\beta_{03}\\) (smaller = smaller rate):",
-                  value = -5,
-                  min = -8.5,
-                  max = 0, 
-                  step = 0.1)
     ),
     
     # Main panel for displaying outputs ----
@@ -439,7 +476,7 @@ ui <- fluidPage(
                   tabPanel("Notation", uiOutput("notation")),
                   tabPanel("Event distributions", plotOutput("eventPlots")),
                   tabPanel("Principal State Composition", plotOutput("compPlot")),
-                  tabPanel("Causal Effect", plotOutput("causalEffectPlot"))
+                  tabPanel("Time-varying SACE", plotOutput("tvsacePlot"))
       )
       
     )
@@ -451,12 +488,11 @@ server <- function(input, output) {
   
   # Simulate new data when parameter inputs change
   dat <- reactive({
-    simulate_RI(input$n, input$theta.true, 
+    simulate_RI(input$n, input$sigma.true, 
                 input$alpha1.true, input$alpha2.true, input$alpha3.true,
-                input$beta1.true, input$beta2.true, input$beta3.true,
-                exp(input$logkappa1.true), 
-                exp(input$logkappa2.true), 
-                exp(input$logkappa3.true),
+                input$alpha4.true, input$alpha5.true, input$alpha6.true,
+                input$kappa1.true, input$kappa2.true, input$kappa3.true,
+                input$kappa4.true, input$kappa5.true, input$kappa6.true,
                 cens)
   })
   
@@ -475,9 +511,9 @@ server <- function(input, output) {
     make_cplot(dat(), maxt)
   })
   
-  # Graph causal effect over time
-  output$causalEffectPlot <- renderPlot({
-    make_aplot(dat(), maxt, yrange = input$yrange)
+  # Graph TV-SACE effect over time
+  output$tvsacePlot <- renderPlot({
+    make_tvsace_plot(dat(), maxt, yrange = input$yrange)
   })
  
 }
