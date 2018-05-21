@@ -5,6 +5,6 @@ account: lcomm
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 227005
-bundleId: 1385290
+bundleId: 1385326
 url: https://lcomm.shinyapps.io/Semicompeting-PS/
-when: 1526930266.57991
+when: 1526931750.45489

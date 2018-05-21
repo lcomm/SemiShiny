@@ -345,9 +345,9 @@ make_tvsace_plot <- function(dat, maxt, yrange) {
                           limits = c(0, max(ce_dat$NumAlive)),
                           guide = guide_colorbar("Number Always-Alive")) + 
     geom_hline(yintercept = 0, linetype = "dashed") + 
-    ggtitle("Causal effect on rehospitalization among Always Alive at t") +
-    labs(subtitle = expression(Q(r,t) == P(R[1]<r~'|'~T[0] > t, T[1] > t)-
-                                 P(R[0]<r~'|'~T[0] > t, T[1] > t)))
+    ggtitle("Causal effect on rehospitalization among always alive at t") +
+    labs(subtitle = expression(Q(r,t) == P(R(1)<r~'|'~T(0) > t, T(1) > t)-
+                                 P(R(0)<r~'|'~T(0) > t, T(1) > t)))
   
   # Return
   return(tvsaceplot)
